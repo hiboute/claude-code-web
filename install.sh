@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 # claude-code-web installer
 # Bootstraps dependencies for Claude Code on the web (claude.ai/code) sandboxes:
-#   - GitHub CLI
 #   - 1Password CLI
-#   - Extra CLI tools   (ripgrep, fd, jq, shellcheck, sqlite3, tree)
-#   - Runtimes          (uv, pnpm)
 #   - Superpowers plugin  (obra/superpowers)
 #   - gstack skills       (garrytan/gstack)
 #   - Hiboute skills      (hiboute/skills)
-#   - Anthropic skills    (anthropics/skills)
-#   - Context7 MCP server (seeded in ~/.claude.json)
 #   - Appends a skills reference block to ~/.claude/CLAUDE.md
 #
 # Usage as a SessionStart hook (.claude/settings.json):
@@ -76,86 +71,6 @@ install_1password_cli() {
 
   sudo apt-get install -y --allow-unauthenticated 1password-cli
   log "1Password CLI installed: $(op --version)"
-}
-
-# --- Extra CLI tools ---------------------------------------------------------
-# Single batched apt install for agent-useful tools. Skipped entirely if all
-# six binaries are already on PATH; otherwise apt-get runs for the whole set
-# (apt-get is a no-op for already-installed packages, so partial state is fine).
-install_extra_cli_tools() {
-  local pkgs=(ripgrep fd-find jq shellcheck sqlite3 tree)
-  local bins=(rg fd jq shellcheck sqlite3 tree)
-  local missing=0
-  for bin in "${bins[@]}"; do
-    command -v "${bin}" >/dev/null 2>&1 || missing=1
-  done
-
-  if [ "${missing}" -eq 0 ]; then
-    log "Extra CLI tools already installed; skipping."
-    return 0
-  fi
-
-  log "Installing extra CLI tools: ${pkgs[*]}"
-  sudo apt-get install -y "${pkgs[@]}"
-
-  # Debian ships fd-find as `fdfind`; add the conventional `fd` alias so the
-  # agent (and users) can invoke it by its canonical name.
-  if [ -x /usr/bin/fdfind ] && [ ! -e /usr/local/bin/fd ]; then
-    sudo ln -sfn /usr/bin/fdfind /usr/local/bin/fd
-  fi
-
-  log "Extra CLI tools installed."
-}
-
-# --- Runtimes (uv, pnpm) -----------------------------------------------------
-# uv: downloaded as a static binary from astral-sh/uv releases to /usr/local/bin
-#     (avoids the curl|sh installer's PATH fiddling).
-# pnpm: enabled via corepack, which ships with Node on claude.ai/code sandboxes.
-install_runtimes() {
-  if ! command -v uv >/dev/null 2>&1; then
-    log "Installing uv (Python)..."
-    local tmp
-    tmp="$(mktemp -d)"
-    local url="https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz"
-    if curl -fsSL "${url}" -o "${tmp}/uv.tar.gz" \
-      && tar -xzf "${tmp}/uv.tar.gz" -C "${tmp}"; then
-      # Archive layout: uv-x86_64-unknown-linux-gnu/uv (and uvx)
-      local extracted
-      extracted="$(find "${tmp}" -maxdepth 2 -type f -name uv | head -1)"
-      if [ -n "${extracted}" ]; then
-        sudo mv "${extracted}" /usr/local/bin/uv
-        sudo chmod +x /usr/local/bin/uv
-        # uvx is a handy companion; install it if present in the archive.
-        local extracted_uvx
-        extracted_uvx="$(find "${tmp}" -maxdepth 2 -type f -name uvx | head -1)"
-        if [ -n "${extracted_uvx}" ]; then
-          sudo mv "${extracted_uvx}" /usr/local/bin/uvx
-          sudo chmod +x /usr/local/bin/uvx
-        fi
-        log "uv installed: $(uv --version 2>/dev/null | head -1)"
-      else
-        log "WARN: uv binary not found in archive"
-      fi
-    else
-      log "WARN: uv download/extract failed"
-    fi
-    rm -rf "${tmp}"
-  else
-    log "uv already installed ($(uv --version 2>/dev/null | head -1)); skipping."
-  fi
-
-  if ! command -v pnpm >/dev/null 2>&1; then
-    if command -v corepack >/dev/null 2>&1; then
-      log "Enabling pnpm via corepack..."
-      sudo corepack enable pnpm
-      log "pnpm enabled: $(pnpm --version 2>/dev/null | head -1)"
-    else
-      log "WARN: corepack not found; cannot enable pnpm"
-      return 1
-    fi
-  else
-    log "pnpm already installed ($(pnpm --version 2>/dev/null | head -1)); skipping."
-  fi
 }
 
 # --- Clone-or-update helper --------------------------------------------------
@@ -259,62 +174,6 @@ EOF
   fi
 }
 
-# --- Anthropic skills (anthropics/skills) -----------------------------------
-# Layout: skills/<name>/SKILL.md (same subfolder pattern Superpowers uses).
-# We clone to ~/.claude/plugins/anthropic-skills and symlink each skill into
-# ~/.claude/skills/anthropic:<name> so the Claude harness auto-discovers them.
-install_anthropic_skills() {
-  local plugin_dir="${CLAUDE_HOME}/plugins/anthropic-skills"
-  clone_or_update "anthropic-skills" \
-    "https://github.com/anthropics/skills.git" "main" "${plugin_dir}"
-
-  if [ ! -d "${plugin_dir}/skills" ]; then
-    log "WARN: ${plugin_dir}/skills not found — anthropics/skills layout changed?"
-    return 0
-  fi
-
-  local linked=0
-  for skill_dir in "${plugin_dir}"/skills/*/; do
-    [ -d "${skill_dir}" ] || continue
-    local name
-    name="$(basename "${skill_dir}")"
-    ln -sfn "${skill_dir%/}" "${CLAUDE_HOME}/skills/anthropic:${name}"
-    linked=$((linked + 1))
-  done
-  log "Linked ${linked} anthropic skills into ~/.claude/skills/"
-}
-
-# --- Context7 MCP server -----------------------------------------------------
-# Seeds ~/.claude.json with an mcpServers.context7 entry (Upstash's up-to-date
-# library-docs MCP). Idempotent: preserves any existing mcpServers entries and
-# does not overwrite a pre-existing context7 entry.
-install_context7_mcp() {
-  if ! command -v jq >/dev/null 2>&1; then
-    log "WARN: jq not available; skipping Context7 MCP seed"
-    return 1
-  fi
-
-  local cfg="${HOME}/.claude.json"
-  [ -f "${cfg}" ] || echo '{}' > "${cfg}"
-
-  # Validate existing file is parseable JSON; if not, bail rather than trash it.
-  if ! jq -e . "${cfg}" >/dev/null 2>&1; then
-    log "WARN: ${cfg} is not valid JSON; skipping Context7 MCP seed"
-    return 1
-  fi
-
-  if jq -e '.mcpServers.context7' "${cfg}" >/dev/null 2>&1; then
-    log "Context7 MCP already present in ${cfg}; skipping."
-    return 0
-  fi
-
-  log "Seeding Context7 MCP in ${cfg}"
-  jq '
-    .mcpServers //= {} |
-    .mcpServers.context7 = { command: "npx", args: ["-y", "@upstash/context7-mcp"] }
-  ' "${cfg}" > "${cfg}.tmp" && mv "${cfg}.tmp" "${cfg}"
-}
-
 # --- CLAUDE.md reference block ----------------------------------------------
 # Appends a skills reference block to ~/.claude/CLAUDE.md, guarded by a
 # sentinel marker so re-runs don't duplicate the section.
@@ -379,16 +238,6 @@ Cloned to `~/.claude/plugins/superpowers`. Skills and hooks are picked up automa
 
 Install with: `git clone --single-branch --depth 1 https://github.com/obra/superpowers.git ~/.claude/plugins/superpowers`
 Update with: `git -C ~/.claude/plugins/superpowers pull --ff-only`
-
-## Anthropic skills
-
-Official Anthropic agent skills (anthropics/skills). Available under the `anthropic:` prefix, e.g. `/anthropic:skill-creator`, `/anthropic:mcp-builder`, `/anthropic:frontend-design`, `/anthropic:webapp-testing`, `/anthropic:claude-api`, `/anthropic:doc-coauthoring`, `/anthropic:docx`, `/anthropic:pdf`, `/anthropic:pptx`, `/anthropic:xlsx`.
-
-Cloned to `~/.claude/plugins/anthropic-skills`; each `skills/*/` is symlinked into `~/.claude/skills/anthropic:<name>`.
-
-## Context7 MCP
-
-Up-to-date library docs via `npx -y @upstash/context7-mcp`. Seeded in `~/.claude.json` by the installer. First use in a session may trigger a one-time MCP approval prompt.
 EOF
 }
 
@@ -408,16 +257,12 @@ run_step() {
 
 main() {
   FAILED_STEPS=()
-  run_step "gh-cli"            install_gh_cli
-  run_step "1password"         install_1password_cli
-  run_step "extra-cli-tools"   install_extra_cli_tools
-  run_step "runtimes"          install_runtimes
-  run_step "superpowers"       install_superpowers
-  run_step "gstack"            install_gstack
-  run_step "hiboute-skills"    install_hiboute_skills
-  run_step "anthropic-skills"  install_anthropic_skills
-  run_step "context7-mcp"      install_context7_mcp
-  run_step "claude-md"         update_claude_md
+  run_step "gh-cli"         install_gh_cli
+  run_step "1password"      install_1password_cli
+  run_step "superpowers"    install_superpowers
+  run_step "gstack"         install_gstack
+  run_step "hiboute-skills" install_hiboute_skills
+  run_step "claude-md"      update_claude_md
 
   if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     log "All done."
