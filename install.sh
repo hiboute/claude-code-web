@@ -65,13 +65,34 @@ clone_or_update() {
 
 # --- Superpowers (plugin) ----------------------------------------------------
 # Workaround for https://github.com/obra/superpowers/issues/262:
-# `claude plugin install` hangs on web — clone directly into ~/.claude/plugins
-# so the hooks + skills are discovered from the filesystem.
+# `claude plugin install` hangs on web, AND the harness only auto-discovers
+# skills under ~/.claude/skills/*/SKILL.md — it does NOT scan plugin dirs
+# without a registered marketplace. So we:
+#   1. Clone the plugin into ~/.claude/plugins/superpowers (source of truth)
+#   2. Symlink each skill into ~/.claude/skills/ so Claude finds them
+#      (same pattern gstack and hiboute-skills use in their ./setup scripts)
 install_superpowers() {
+  local plugin_dir="${CLAUDE_HOME}/plugins/superpowers"
   clone_or_update "superpowers" \
     "${SUPERPOWERS_REPO_URL:-https://github.com/obra/superpowers.git}" \
     "${SUPERPOWERS_REPO_REF:-main}" \
-    "${CLAUDE_HOME}/plugins/superpowers"
+    "${plugin_dir}"
+
+  if [ ! -d "${plugin_dir}/skills" ]; then
+    log "WARN: ${plugin_dir}/skills not found — superpowers layout changed?"
+    return 0
+  fi
+
+  local linked=0
+  for skill_dir in "${plugin_dir}"/skills/*/; do
+    [ -d "${skill_dir}" ] || continue
+    local name
+    name="$(basename "${skill_dir}")"
+    # Prefix with "superpowers:" to avoid collisions with other providers.
+    ln -sfn "${skill_dir%/}" "${CLAUDE_HOME}/skills/superpowers:${name}"
+    linked=$((linked + 1))
+  done
+  log "Linked ${linked} superpowers skills into ~/.claude/skills/"
 }
 
 # --- gstack skills -----------------------------------------------------------
