@@ -85,9 +85,15 @@ install_gstack() {
 }
 
 # --- Hiboute skills ----------------------------------------------------------
+# hiboute/skills is a PRIVATE repo. Requires GITHUB_TOKEN in the environment
+# (claude.ai/code sandboxes can inject one) or pre-authenticated git/gh.
 install_hiboute_skills() {
   local dest="${CLAUDE_HOME}/skills/hiboute-skills"
-  clone_or_update "hiboute-skills" "https://github.com/hiboute/skills.git" "main" "${dest}"
+  local url="https://github.com/hiboute/skills.git"
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    url="https://x-access-token:${GITHUB_TOKEN}@github.com/hiboute/skills.git"
+  fi
+  clone_or_update "hiboute-skills" "${url}" "main" "${dest}"
   if [ -x "${dest}/setup" ]; then
     log "Running hiboute-skills ./setup"
     (cd "${dest}" && ./setup) || log "WARN: hiboute-skills setup exited non-zero (continuing)"
@@ -162,13 +168,33 @@ EOF
 }
 
 # --- Main --------------------------------------------------------------------
+# Each step runs in a subshell so a single failure doesn't abort the rest.
+# Subshell exit codes are captured; we track whether any step failed.
+run_step() {
+  local name="$1"; shift
+  if ( "$@" ); then
+    return 0
+  else
+    log "WARN: step '${name}' failed (continuing)"
+    FAILED_STEPS+=("${name}")
+    return 0
+  fi
+}
+
 main() {
-  install_1password_cli
-  install_superpowers
-  install_gstack
-  install_hiboute_skills
-  update_claude_md
-  log "All done."
+  FAILED_STEPS=()
+  run_step "1password"      install_1password_cli
+  run_step "superpowers"    install_superpowers
+  run_step "gstack"         install_gstack
+  run_step "hiboute-skills" install_hiboute_skills
+  run_step "claude-md"      update_claude_md
+
+  if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
+    log "All done."
+  else
+    log "Done with failures: ${FAILED_STEPS[*]}"
+    exit 1
+  fi
 }
 
 main "$@"
