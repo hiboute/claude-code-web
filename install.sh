@@ -24,6 +24,32 @@ command -v git >/dev/null 2>&1 || die "git is required."
 CLAUDE_HOME="${HOME}/.claude"
 mkdir -p "${CLAUDE_HOME}/plugins" "${CLAUDE_HOME}/skills"
 
+# --- GitHub CLI --------------------------------------------------------------
+# Installed first because install_hiboute_skills falls back to `gh auth token`
+# when GITHUB_TOKEN isn't set. Also a convenience for interactive work.
+install_gh_cli() {
+  if command -v gh >/dev/null 2>&1; then
+    log "GitHub CLI already installed ($(gh --version | head -1)); skipping."
+    return 0
+  fi
+
+  log "Installing GitHub CLI..."
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg status=none
+  sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+
+  sudo apt-get update \
+    -o Acquire::AllowInsecureRepositories=true \
+    -o Acquire::AllowDowngradeToInsecureRepositories=true \
+    2>/dev/null || true
+
+  sudo apt-get install -y --allow-unauthenticated gh
+  log "GitHub CLI installed: $(gh --version | head -1)"
+}
+
 # --- 1Password CLI -----------------------------------------------------------
 install_1password_cli() {
   if command -v op >/dev/null 2>&1; then
@@ -228,6 +254,7 @@ run_step() {
 
 main() {
   FAILED_STEPS=()
+  run_step "gh-cli"         install_gh_cli
   run_step "1password"      install_1password_cli
   run_step "superpowers"    install_superpowers
   run_step "gstack"         install_gstack

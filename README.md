@@ -3,6 +3,7 @@
 Bootstrap script for [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web) sandboxes.
 
 Installs:
+- [GitHub CLI](https://cli.github.com/) (`gh`)
 - [1Password CLI](https://developer.1password.com/docs/cli/) (`op`)
 - [Superpowers plugin](https://github.com/obra/superpowers) — into `~/.claude/plugins/superpowers`
 - [gstack skills](https://github.com/garrytan/gstack) — into `~/.claude/skills/gstack`
