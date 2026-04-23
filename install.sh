@@ -106,14 +106,38 @@ install_gstack() {
 }
 
 # --- Hiboute skills ----------------------------------------------------------
-# hiboute/skills is a PRIVATE repo. Requires GITHUB_TOKEN in the environment
-# (claude.ai/code sandboxes can inject one) or pre-authenticated git/gh.
+# hiboute/skills is a PRIVATE repo. Credential sources (in order):
+#   1. $GITHUB_TOKEN env var
+#   2. `gh auth token` if the GitHub CLI is installed and authenticated
+# If neither is available, print a very loud ACTION REQUIRED message so the
+# user knows why the skills didn't install.
 install_hiboute_skills() {
   local dest="${CLAUDE_HOME}/skills/hiboute-skills"
-  local url="https://github.com/hiboute/skills.git"
+  local token=""
+
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    url="https://x-access-token:${GITHUB_TOKEN}@github.com/hiboute/skills.git"
+    token="${GITHUB_TOKEN}"
+  elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    token="$(gh auth token 2>/dev/null || true)"
   fi
+
+  if [ -z "${token}" ]; then
+    cat >&2 <<'EOF'
+
+  ====================================================================
+  ACTION REQUIRED: hiboute-skills (private repo) NOT installed
+  --------------------------------------------------------------------
+  The hiboute/skills repo is private. To install it, either:
+    1. Set GITHUB_TOKEN in the sandbox environment, OR
+    2. Install and authenticate the `gh` CLI before the setup script
+  Once set, re-run the installer.
+  ====================================================================
+
+EOF
+    return 1
+  fi
+
+  local url="https://x-access-token:${token}@github.com/hiboute/skills.git"
   clone_or_update "hiboute-skills" "${url}" "main" "${dest}"
   if [ -x "${dest}/setup" ]; then
     log "Running hiboute-skills ./setup"
