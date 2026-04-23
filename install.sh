@@ -133,15 +133,17 @@ install_gstack() {
 
 # --- Hiboute skills ----------------------------------------------------------
 # hiboute/skills is a PRIVATE repo. Credential sources (in order):
-#   1. $GITHUB_TOKEN env var
-#   2. `gh auth token` if the GitHub CLI is installed and authenticated
-# If neither is available, print a very loud ACTION REQUIRED message so the
-# user knows why the skills didn't install.
+#   1. $GH_TOKEN env var       (claude.ai/code cloud runs expose this name)
+#   2. $GITHUB_TOKEN env var   (GitHub Actions convention)
+#   3. `gh auth token`         (if gh is installed and authenticated)
+# If none available, print a very loud ACTION REQUIRED message.
 install_hiboute_skills() {
   local dest="${CLAUDE_HOME}/skills/hiboute-skills"
   local token=""
 
-  if [ -n "${GITHUB_TOKEN:-}" ]; then
+  if [ -n "${GH_TOKEN:-}" ]; then
+    token="${GH_TOKEN}"
+  elif [ -n "${GITHUB_TOKEN:-}" ]; then
     token="${GITHUB_TOKEN}"
   elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     token="$(gh auth token 2>/dev/null || true)"
@@ -153,9 +155,10 @@ install_hiboute_skills() {
   ====================================================================
   ACTION REQUIRED: hiboute-skills (private repo) NOT installed
   --------------------------------------------------------------------
-  The hiboute/skills repo is private. To install it, either:
-    1. Set GITHUB_TOKEN in the sandbox environment, OR
-    2. Install and authenticate the `gh` CLI before the setup script
+  The hiboute/skills repo is private. To install it, set one of:
+    - GH_TOKEN     (claude.ai/code cloud run env var), or
+    - GITHUB_TOKEN, or
+    - Pre-authenticate the `gh` CLI
   Once set, re-run the installer.
   ====================================================================
 
