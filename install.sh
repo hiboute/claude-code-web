@@ -89,38 +89,6 @@ clone_or_update() {
   fi
 }
 
-# --- Superpowers (plugin) ----------------------------------------------------
-# Workaround for https://github.com/obra/superpowers/issues/262:
-# `claude plugin install` hangs on web, AND the harness only auto-discovers
-# skills under ~/.claude/skills/*/SKILL.md — it does NOT scan plugin dirs
-# without a registered marketplace. So we:
-#   1. Clone the plugin into ~/.claude/plugins/superpowers (source of truth)
-#   2. Symlink each skill into ~/.claude/skills/ so Claude finds them
-#      (same pattern gstack and hiboute-skills use in their ./setup scripts)
-install_superpowers() {
-  local plugin_dir="${CLAUDE_HOME}/plugins/superpowers"
-  clone_or_update "superpowers" \
-    "${SUPERPOWERS_REPO_URL:-https://github.com/obra/superpowers.git}" \
-    "${SUPERPOWERS_REPO_REF:-main}" \
-    "${plugin_dir}"
-
-  if [ ! -d "${plugin_dir}/skills" ]; then
-    log "WARN: ${plugin_dir}/skills not found — superpowers layout changed?"
-    return 0
-  fi
-
-  local linked=0
-  for skill_dir in "${plugin_dir}"/skills/*/; do
-    [ -d "${skill_dir}" ] || continue
-    local name
-    name="$(basename "${skill_dir}")"
-    # Prefix with "superpowers:" to avoid collisions with other providers.
-    ln -sfn "${skill_dir%/}" "${CLAUDE_HOME}/skills/superpowers:${name}"
-    linked=$((linked + 1))
-  done
-  log "Linked ${linked} superpowers skills into ~/.claude/skills/"
-}
-
 # --- gstack skills -----------------------------------------------------------
 install_gstack() {
   local dest="${CLAUDE_HOME}/skills/gstack"
@@ -222,13 +190,6 @@ Available skills: `/ideation` `/roadmap` `/autopilot`
 
 Install with: `gh repo clone hiboute/skills ~/.claude/skills/hiboute-skills && ~/.claude/skills/hiboute-skills/setup`
 Update with: `~/.claude/skills/hiboute-skills/bin/hiboute-skills-upgrade`
-
-## Superpowers plugin
-
-Cloned to `~/.claude/plugins/superpowers`. Skills and hooks are picked up automatically.
-
-Install with: `git clone --single-branch --depth 1 https://github.com/obra/superpowers.git ~/.claude/plugins/superpowers`
-Update with: `git -C ~/.claude/plugins/superpowers pull --ff-only`
 EOF
 }
 
