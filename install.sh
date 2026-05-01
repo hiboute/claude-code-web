@@ -2,7 +2,6 @@
 # claude-code-web installer
 # Bootstraps dependencies for Claude Code on the web (claude.ai/code) sandboxes:
 #   - 1Password CLI
-#   - Superpowers plugin  (obra/superpowers)
 #   - gstack skills       (garrytan/gstack)
 #   - Hiboute skills      (hiboute/skills)
 #   - Appends a skills reference block to ~/.claude/CLAUDE.md
