@@ -210,7 +210,6 @@ main() {
   FAILED_STEPS=()
   run_step "gh-cli"         install_gh_cli
   run_step "1password"      install_1password_cli
-  run_step "superpowers"    install_superpowers
   run_step "gstack"         install_gstack
   run_step "hiboute-skills" install_hiboute_skills
   run_step "claude-md"      update_claude_md
