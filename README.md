@@ -60,9 +60,12 @@ The memory hooks read these from the cloud environment's secrets:
 | `AGENT_MEMORY_SOURCE=cloud` | sandbox hostnames are random container IDs; this names the inbox files |
 | `ANTHROPIC_API_KEY` | optional — summariser fallback for when a nested `claude -p` cannot authenticate (see "Which Haiku answers" in the memory README) |
 
-Without a token (`AGENT_MEMORY_GH_TOKEN`, falling back to `GH_TOKEN`), both memory
-hooks exit 0 before touching the network: a sandbox without memory is degraded, not
-broken.
+**Hook processes never see environment secrets** — secrets load after hooks, which
+is also why this repo is public. The setup script is the actor that has them, so it
+persists what the hooks need to `~/.config/agent-memory/` and pre-fetches the hook
+scripts into `~/.local/bin` while it can. Without `AGENT_MEMORY_GH_TOKEN` at setup
+time, the memory hooks are inert and everything else still works: a sandbox without
+memory is degraded, not broken.
 
 ## Running locally
 
