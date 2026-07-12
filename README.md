@@ -9,10 +9,11 @@ Installs:
 - [Hiboute skills](https://github.com/hiboute/skills) — into `~/.claude/skills/hiboute-skills`
 - A skills reference block in `~/.claude/CLAUDE.md`
 - **Agent-memory hooks** in `~/.claude/settings.json` — `SessionStart` injects `core.md`
-  into context, `SessionEnd` captures the finished session into the vault's inbox. Both
-  hooks fetch their scripts at run time from the private
-  [hiboute/memory](https://github.com/hiboute/memory) repo via the GitHub contents API;
-  that repo's README documents how the memory system works.
+  into context, `SessionEnd` captures the finished session into the vault's inbox. The
+  two hook scripts (`inject-core.sh`, `capture-remote.sh`) live **in this repo**: they
+  contain nothing sensitive, which is what keeps every fetch anonymous. The private
+  [hiboute/memory](https://github.com/hiboute/memory) README documents how the memory
+  system works.
 
 ## Why
 
@@ -62,10 +63,10 @@ The memory hooks read these from the cloud environment's secrets:
 
 **Hook processes never see environment secrets** — secrets load after hooks, which
 is also why this repo is public. The setup script is the actor that has them, so it
-persists what the hooks need to `~/.config/agent-memory/` and pre-fetches the hook
-scripts into `~/.local/bin` while it can. Without `AGENT_MEMORY_GH_TOKEN` at setup
-time, the memory hooks are inert and everything else still works: a sandbox without
-memory is degraded, not broken.
+persists what the hooks need to `~/.config/agent-memory/` and fetches the hook scripts
+from this repo into `~/.local/bin` — anonymously, since nothing in them is sensitive. Without `AGENT_MEMORY_GH_TOKEN` at setup
+time the hooks still install, but memory stays inert until the secret exists: a
+sandbox without memory is degraded, not broken.
 
 ## Running locally
 

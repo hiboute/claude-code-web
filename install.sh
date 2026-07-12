@@ -195,22 +195,22 @@ EOF
 }
 
 # --- Memory hooks -------------------------------------------------------------
-# The environment setup script is the ONLY actor that runs with the environment
-# secrets in hand — hook processes never see them (secrets load after hooks),
-# which is also why this repo is public. So this step bridges through files:
-#   1. persist AGENT_MEMORY_GH_TOKEN, ANTHROPIC_API_KEY, AGENT_MEMORY_SOURCE
+# Hook processes never see environment secrets (they load after hooks) — the
+# reason this whole repo, hook scripts included, is public: everything a hook
+# fetches must be fetchable with zero credentials. The setup script is the one
+# actor that runs WITH the secrets, so it bridges them into files:
+#   1. persist AGENT_MEMORY_GH_TOKEN / ANTHROPIC_API_KEY / AGENT_MEMORY_SOURCE
 #      into ~/.config/agent-memory/ (0600)
-#   2. pre-fetch inject-core.sh + capture-remote.sh from the private
-#      hiboute/memory repo into ~/.local/bin, authenticated, at setup time
-#   3. write SessionStart/SessionEnd hooks that run those local copies —
-#      no fetch, no env secret needed at hook time
-# Without a token this logs and skips: a sandbox without memory is degraded,
-# not broken.
+#   2. fetch inject-core.sh + capture-remote.sh from THIS repo, anonymously,
+#      into ~/.local/bin
+#   3. write SessionStart/SessionEnd hooks that run those local copies
+# The scripts contain nothing sensitive; without the gh-token file, memory
+# stays inert at run time — degraded, not broken.
 install_memory_hooks() {
   local settings="${CLAUDE_HOME}/settings.json"
   local bin="${HOME}/.local/bin"
   local cfg="${HOME}/.config/agent-memory"
-  local token="${AGENT_MEMORY_GH_TOKEN:-${GH_TOKEN:-}}"
+  local base="https://raw.githubusercontent.com/hiboute/claude-code-web/main"
 
   mkdir -p "${bin}" "${cfg}"
   chmod 700 "${cfg}"
@@ -220,7 +220,7 @@ install_memory_hooks() {
     printf '%s' "${AGENT_MEMORY_GH_TOKEN}" > "${cfg}/gh-token" && chmod 600 "${cfg}/gh-token"
     log "Persisted AGENT_MEMORY_GH_TOKEN to ${cfg}/gh-token"
   else
-    log "AGENT_MEMORY_GH_TOKEN not visible at setup time — memory hooks will be inert."
+    log "AGENT_MEMORY_GH_TOKEN not set: hooks install anyway; memory stays inert until it is."
   fi
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     printf '%s' "${ANTHROPIC_API_KEY}" > "${cfg}/llm-key" && chmod 600 "${cfg}/llm-key"
@@ -228,26 +228,19 @@ install_memory_hooks() {
   fi
   printf '%s' "${AGENT_MEMORY_SOURCE:-cloud}" > "${cfg}/source"
 
-  # 2. Pre-fetch the hook scripts, authenticated.
-  if [ -n "${token}" ]; then
-    local s rc=0
-    for s in inject-core.sh capture-remote.sh; do
-      if curl -fsSL -m 15 \
-          -H "Authorization: Bearer ${token}" \
-          -H "Accept: application/vnd.github.raw" \
-          "https://api.github.com/repos/hiboute/memory/contents/${s}?ref=main" \
-          -o "${bin}/${s}"; then
-        chmod +x "${bin}/${s}"
-        log "Fetched ${s} -> ${bin}/${s}"
-      else
-        log "WARN: could not fetch ${s} (403 = token cannot see hiboute/memory)"
-        rc=1
-      fi
-    done
-    [ "${rc}" -ne 0 ] && return 1
-  fi
+  # 2. Fetch the hook scripts from this public repo — anonymous by design.
+  local s
+  for s in inject-core.sh capture-remote.sh; do
+    if curl -fsSL -m 15 "${base}/${s}" -o "${bin}/${s}"; then
+      chmod +x "${bin}/${s}"
+      log "Fetched ${s} -> ${bin}/${s}"
+    else
+      log "WARN: could not fetch ${s}"
+      return 1
+    fi
+  done
 
-  # 3. Write the hooks. They run local files only.
+  # 3. Hooks run the local copies; no fetch, no env secret at hook time.
   if [ -s "${settings}" ] && grep -q "capture-remote.sh" "${settings}"; then
     log "Memory hooks already present in ${settings}; skipping."
     return 0
@@ -286,26 +279,6 @@ install_memory_hooks() {
 HOOKS_EOF
 
   if [ -s "${settings}" ]; then
-    # Merge into existing settings; our hook groups win on key collision.
-    if command -v jq >/dev/null 2>&1; then
-      log "Merging memory hooks into existing ${settings}"
-      jq -s '.[0] * .[1]' "${settings}" "${tmp}" > "${settings}.new" \
-        && mv "${settings}.new" "${settings}"
-    else
-      log "WARN: jq missing and ${settings} non-empty; leaving it untouched."
-      rm -f "${tmp}"
-      return 1
-    fi
-    rm -f "${tmp}"
-  else
-    log "Writing memory hooks to ${settings}"
-    mv "${tmp}" "${settings}"
-  fi
-}
-HOOKS_EOF
-
-  if [ -s "${settings}" ]; then
-    # Merge into existing settings; our hook groups win on key collision.
     if command -v jq >/dev/null 2>&1; then
       log "Merging memory hooks into existing ${settings}"
       jq -s '.[0] * .[1]' "${settings}" "${tmp}" > "${settings}.new" \
