@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc 'curl -fsSL https://raw.githubusercontent.com/hiboute/claude-code-web/main/load-memory.sh | bash'",
+            "command": "bash -lc '[ -n \"${GH_TOKEN:-}\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 10 -H \"Authorization: Bearer $GH_TOKEN\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/inject-core.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
             "timeout": 20
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc 'tmp=$(mktemp); curl -fsSL https://raw.githubusercontent.com/hiboute/memory/main/capture-remote.sh -o \"$tmp\" && chmod +x \"$tmp\" && \"$tmp\"; rm -f \"$tmp\"; exit 0'",
+            "command": "bash -lc '[ -n \"${GH_TOKEN:-}\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 15 -H \"Authorization: Bearer $GH_TOKEN\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/capture-remote.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
             "timeout": 120
           }
         ]
