@@ -9,6 +9,27 @@
             "command": "bash -lc 'set -euo pipefail; tmp=$(mktemp); curl -fsSL https://raw.githubusercontent.com/hiboute/claude-code-web/main/install.sh -o \"$tmp\"; chmod +x \"$tmp\"; \"$tmp\"; rm -f \"$tmp\"'"
           }
         ]
+      },
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc 'curl -fsSL https://raw.githubusercontent.com/hiboute/claude-code-web/main/load-memory.sh | bash'",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc 'tmp=$(mktemp); curl -fsSL https://raw.githubusercontent.com/hiboute/memory/main/capture-remote.sh -o \"$tmp\" && chmod +x \"$tmp\" && \"$tmp\"; rm -f \"$tmp\"; exit 0'",
+            "timeout": 120
+          }
+        ]
       }
     ]
   }
