@@ -16,7 +16,7 @@ Installs:
 
 ## Why
 
-Claude Code on the web can't run `claude plugin install` — the command hangs (see [obra/superpowers#262](https://github.com/obra/superpowers/issues/262)). Anthropic's documented workaround is a [`SessionStart` hook](https://code.claude.com/docs/en/claude-code-on-the-web#dependency-management) that runs a dependency-install script from your repo. This is that script.
+Claude Code on the web can't run `claude plugin install` — the command hangs. Anthropic's documented workaround is a [`SessionStart` hook](https://code.claude.com/docs/en/claude-code-on-the-web#dependency-management) that runs a dependency-install script from your repo. This is that script.
 
 ## Usage
 
