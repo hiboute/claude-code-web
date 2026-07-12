@@ -5,6 +5,7 @@
 #   - gstack skills       (garrytan/gstack)
 #   - Hiboute skills      (hiboute/skills)
 #   - Appends a skills reference block to ~/.claude/CLAUDE.md
+#   - Memory hooks (inject-core.sh / capture-remote.sh) into ~/.claude/settings.json
 #
 # Usage as a SessionStart hook (.claude/settings.json):
 #   bash -lc 'curl -fsSL https://raw.githubusercontent.com/hiboute/claude-code-web/main/install.sh | bash'
@@ -134,6 +135,7 @@ install_hiboute_skills() {
 
 # --- CLAUDE.md reference block ----------------------------------------------
 # Appends a skills reference block to ~/.claude/CLAUDE.md, guarded by a
+#   - Memory hooks (inject-core.sh / capture-remote.sh) into ~/.claude/settings.json
 # sentinel marker so re-runs don't duplicate the section.
 SENTINEL_BEGIN="<!-- claude-code-web:skills-ref BEGIN -->"
 SENTINEL_END="<!-- claude-code-web:skills-ref END -->"
@@ -192,6 +194,73 @@ Update with: `~/.claude/skills/hiboute-skills/bin/hiboute-skills-upgrade`
 EOF
 }
 
+# --- Memory hooks -------------------------------------------------------------
+# Writes the agent-memory hooks into ~/.claude/settings.json so every session in
+# this sandbox injects core.md at start (inject-core.sh) and captures at end
+# (capture-remote.sh). Both are fetched from the private hiboute/memory repo via
+# the GitHub contents API using $GH_TOKEN — a headless-safe path, per the rule
+# that hooks may only depend on what a headless shell can reach.
+#
+# Requires in the environment: GH_TOKEN (contents read+write on hiboute/memory).
+# Optional: ANTHROPIC_API_KEY (summariser fallback), AGENT_MEMORY_SOURCE=cloud.
+install_memory_hooks() {
+  local settings="${CLAUDE_HOME}/settings.json"
+
+  if [ -s "${settings}" ] && grep -q "capture-remote.sh" "${settings}"; then
+    log "Memory hooks already present in ${settings}; skipping."
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  cat > "${tmp}" <<'HOOKS_EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc '[ -n \"${GH_TOKEN:-}\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 10 -H \"Authorization: Bearer $GH_TOKEN\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/inject-core.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc '[ -n \"${GH_TOKEN:-}\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 15 -H \"Authorization: Bearer $GH_TOKEN\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/capture-remote.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOKS_EOF
+
+  if [ -s "${settings}" ]; then
+    # Merge into existing settings; our hook groups win on key collision.
+    if command -v jq >/dev/null 2>&1; then
+      log "Merging memory hooks into existing ${settings}"
+      jq -s '.[0] * .[1]' "${settings}" "${tmp}" > "${settings}.new" \
+        && mv "${settings}.new" "${settings}"
+    else
+      log "WARN: jq missing and ${settings} non-empty; leaving it untouched."
+      rm -f "${tmp}"
+      return 1
+    fi
+    rm -f "${tmp}"
+  else
+    log "Writing memory hooks to ${settings}"
+    mv "${tmp}" "${settings}"
+  fi
+}
+
 # --- Main --------------------------------------------------------------------
 # Each step runs in a subshell so a single failure doesn't abort the rest.
 # Subshell exit codes are captured; we track whether any step failed.
@@ -213,6 +282,7 @@ main() {
   run_step "gstack"         install_gstack
   run_step "hiboute-skills" install_hiboute_skills
   run_step "claude-md"      update_claude_md
+  run_step "memory-hooks"   install_memory_hooks
 
   if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     log "All done."
