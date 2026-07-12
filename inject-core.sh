@@ -40,9 +40,35 @@ gh() {
 
 core=""
 
+# MCP endpoint config (sandbox rail). A bearer here means "not a host, not a Mac —
+# a cloud sandbox where gh is brokered but the MCP host is reachable." Read it from
+# env or the setup-script-written file.
+MCP_URL="${AGENT_MEMORY_MCP_URL:-https://mcp-memory.robiche.fr/mcp}"
+MCP_TOKEN="${AGENT_MEMORY_TOKEN:-}"
+[ -z "$MCP_TOKEN" ] && [ -f "$HOME/.config/agent-memory/mcp-token" ] \
+  && MCP_TOKEN="$(tr -d '\n' < "$HOME/.config/agent-memory/mcp-token")"
+
+# read core via the MCP endpoint's JSON-RPC — a plain HTTPS POST, not an MCP tool
+# call, so it works headless. Extracts result.content[0].text.
+mcp_get_core() {
+  local resp
+  resp=$(curl -sS -m 12 -X POST "$MCP_URL" \
+    -H "Authorization: Bearer $MCP_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory_get_core","arguments":{}}}' 2>/dev/null) || return 1
+  # server may answer plain JSON or SSE ("data: {...}"); strip the prefix if present.
+  local body; body=$(printf '%s\n' "$resp" | sed -n 's/^data: //p'); [ -z "$body" ] && body="$resp"
+  printf '%s' "$body" | jq -r 'select(.result?) | .result.content[0].text // empty' 2>/dev/null
+}
+
 # 1. Host: read the vault directly.
 if [ -f "$VAULT/core.md" ]; then
   core=$(cat "$VAULT/core.md")
+
+# 1b. Sandbox: MCP endpoint with a static bearer (gh is brokered in cloud).
+elif [ -n "$MCP_TOKEN" ]; then
+  core=$(mcp_get_core || true)
 
 # 2. Client: pull core.md from the private repo through gh, which is already
 #    authenticated on these machines. No new token to mint or rotate.

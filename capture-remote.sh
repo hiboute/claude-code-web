@@ -36,6 +36,14 @@ SOURCE="${AGENT_MEMORY_SOURCE:-}"
   && SOURCE="$(tr -d '\n' < "$HOME/.config/agent-memory/source")"
 [ -z "$SOURCE" ] && SOURCE="$(hostname -s | tr '[:upper:]' '[:lower:]')"
 
+# MCP endpoint (sandbox rail). If a bearer is present we will write via the MCP
+# endpoint instead of gh — gh/api.github.com is brokered in cloud sandboxes and
+# cannot reach a private vault repo, but the MCP host is plain reachable HTTPS.
+MCP_URL="${AGENT_MEMORY_MCP_URL:-https://mcp-memory.robiche.fr/mcp}"
+MCP_TOKEN="${AGENT_MEMORY_TOKEN:-}"
+[ -z "$MCP_TOKEN" ] && [ -f "$HOME/.config/agent-memory/mcp-token" ] \
+  && MCP_TOKEN="$(tr -d '\n' < "$HOME/.config/agent-memory/mcp-token")"
+
 # This host may have several gh accounts; only GH_USER can push to the private memory
 # repo. Shadow `gh` so every call carries GH_USER's token, pulled from the keyring
 # with `--user` — without switching the active account (which would hijack the
@@ -58,8 +66,10 @@ gh() {
 # The claude -p summariser below is itself a Claude session, which fires SessionEnd again.
 [ "${CLAUDE_MEMORY_CAPTURE:-}" = "1" ] && exit 0
 
-command -v gh >/dev/null 2>&1 || exit 0
-gh auth status >/dev/null 2>&1 || exit 0
+if [ -z "$MCP_TOKEN" ]; then
+  command -v gh >/dev/null 2>&1 || exit 0
+  gh auth status >/dev/null 2>&1 || exit 0
+fi
 
 LLM_KEY="${ANTHROPIC_API_KEY:-}"
 LLM_KEY_FILE="${AGENT_MEMORY_LLM_KEY_FILE:-$HOME/.config/agent-memory/llm-key}"
@@ -133,10 +143,24 @@ path="inbox/$(date +%F)-${SOURCE}-${session}.md"
 content=$(printf '# Session capture — %s (%s)\n\n%s\n\n_captured %s_\n' \
   "$SOURCE" "$(date +%F)" "$learnings" "$(date -Iseconds)")
 
-# tr -d: GNU base64 wraps at 76 cols (Linux sandboxes); macOS does not. Strip both.
-gh api --method PUT "repos/$REPO/contents/$path" \
-  -f message="memory: session capture from $SOURCE" \
-  -f content="$(printf '%s' "$content" | base64 | tr -d '\n')" \
-  >/dev/null 2>&1 || true
+# Write path forks by rail. Sandbox (bearer present): POST memory_append to the MCP
+# endpoint — the server files it under inbox/<date>-<source>.md itself, so $path is
+# unused on this branch. Host/Mac (no bearer): gh api PUT as before.
+if [ -n "$MCP_TOKEN" ]; then
+  req=$(jq -n --arg t "Session on $SOURCE" --arg c "$learnings" --arg s "$SOURCE" \
+    '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"memory_append",
+      arguments:{title:$t,content:$c,source:$s,tags:"session-capture"}}}')
+  curl -sS -m 30 -X POST "$MCP_URL" \
+    -H "Authorization: Bearer $MCP_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -d "$req" >/dev/null 2>&1 || true
+else
+  # tr -d: GNU base64 wraps at 76 cols (Linux sandboxes); macOS does not. Strip both.
+  gh api --method PUT "repos/$REPO/contents/$path" \
+    -f message="memory: session capture from $SOURCE" \
+    -f content="$(printf '%s' "$content" | base64 | tr -d '\n')" \
+    >/dev/null 2>&1 || true
+fi
 
 exit 0

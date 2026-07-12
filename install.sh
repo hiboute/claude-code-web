@@ -227,6 +227,15 @@ install_memory_hooks() {
     log "Persisted ANTHROPIC_API_KEY to ${cfg}/llm-key"
   fi
   printf '%s' "${AGENT_MEMORY_SOURCE:-cloud}" > "${cfg}/source"
+  # The MCP bearer is what the cloud rail actually needs — gh is brokered in
+  # sandboxes, the MCP host is not. Persist it for the hooks (they run without env
+  # secrets). Written unconditionally when present so a boot-during-push cannot skip it.
+  if [ -n "${AGENT_MEMORY_TOKEN:-}" ]; then
+    printf '%s' "${AGENT_MEMORY_TOKEN}" > "${cfg}/mcp-token" && chmod 600 "${cfg}/mcp-token"
+    log "Persisted AGENT_MEMORY_TOKEN to ${cfg}/mcp-token (MCP rail)"
+  else
+    log "AGENT_MEMORY_TOKEN not set: cloud capture needs it (gh is brokered in sandboxes)."
+  fi
 
   # 2. Fetch the hook scripts from this public repo — anonymous by design.
   local s
