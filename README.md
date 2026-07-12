@@ -56,12 +56,13 @@ The memory hooks read these from the cloud environment's secrets:
 
 | Secret | Why |
 |---|---|
-| `GH_TOKEN` | fine-grained PAT, **Contents read + write** on `hiboute/memory` — capture PUTs new inbox files, it does not just read |
+| `AGENT_MEMORY_GH_TOKEN` | fine-grained PAT, **Contents read + write** on `hiboute/memory` — capture PUTs new inbox files, it does not just read. Do **not** name it `GH_TOKEN`: the platform injects its own token under that name, scoped to the session's repo, and it 403s against the vault |
 | `AGENT_MEMORY_SOURCE=cloud` | sandbox hostnames are random container IDs; this names the inbox files |
 | `ANTHROPIC_API_KEY` | optional — summariser fallback for when a nested `claude -p` cannot authenticate (see "Which Haiku answers" in the memory README) |
 
-Without `GH_TOKEN`, both memory hooks exit 0 before touching the network: a sandbox
-without memory is degraded, not broken.
+Without a token (`AGENT_MEMORY_GH_TOKEN`, falling back to `GH_TOKEN`), both memory
+hooks exit 0 before touching the network: a sandbox without memory is degraded, not
+broken.
 
 ## Running locally
 

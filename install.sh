@@ -201,7 +201,10 @@ EOF
 # the GitHub contents API using $GH_TOKEN — a headless-safe path, per the rule
 # that hooks may only depend on what a headless shell can reach.
 #
-# Requires in the environment: GH_TOKEN (contents read+write on hiboute/memory).
+# Requires in the environment: AGENT_MEMORY_GH_TOKEN — a fine-grained PAT with
+# contents read+write on hiboute/memory. (The platform's ambient GH_TOKEN is its
+# own installation token, scoped to the session's repo; it 403s on the vault, so
+# the hooks prefer AGENT_MEMORY_GH_TOKEN and only fall back to GH_TOKEN.)
 # Optional: ANTHROPIC_API_KEY (summariser fallback), AGENT_MEMORY_SOURCE=cloud.
 install_memory_hooks() {
   local settings="${CLAUDE_HOME}/settings.json"
@@ -222,7 +225,7 @@ install_memory_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc '[ -n \"${GH_TOKEN:-}\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 10 -H \"Authorization: Bearer $GH_TOKEN\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/inject-core.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
+            "command": "bash -lc 't=\"${AGENT_MEMORY_GH_TOKEN:-${GH_TOKEN:-}}\"; [ -n \"$t\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 10 -H \"Authorization: Bearer $t\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/inject-core.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
             "timeout": 20
           }
         ]
@@ -233,7 +236,7 @@ install_memory_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "bash -lc '[ -n \"${GH_TOKEN:-}\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 15 -H \"Authorization: Bearer $GH_TOKEN\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/capture-remote.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
+            "command": "bash -lc 't=\"${AGENT_MEMORY_GH_TOKEN:-${GH_TOKEN:-}}\"; [ -n \"$t\" ] || exit 0; tmp=$(mktemp); curl -fsSL -m 15 -H \"Authorization: Bearer $t\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/hiboute/memory/contents/capture-remote.sh?ref=main\" -o \"$tmp\" && bash \"$tmp\"; rm -f \"$tmp\"; exit 0'",
             "timeout": 120
           }
         ]
