@@ -52,9 +52,22 @@ MCP_URL="${AGENT_MEMORY_MCP_URL:-$(cfg mcp-url https://mcp-obsidian.chrobiche.wo
 MCP_TOKEN="${OBSIDIAN_MCP_TOKEN:-$(cfg obsidian-token '')}"
 VAULT="${AGENT_MEMORY_VAULT:-$(cfg vault-path '')}"
 
+# The distiller sorts captures on <source>, and the capture format names the values it
+# expects: app | cowork | ccr | hostname. Cloud environments still export the pre-v2
+# `AGENT_MEMORY_SOURCE=cloud`, and earlier captures went in as `claude-code-remote`, so
+# fold the known aliases onto `ccr` rather than splitting one client three ways.
+# Anything else (a hostname, `app`, `cowork`) passes through untouched.
+normalize_source() {
+  case "$1" in
+    cloud|claude-code-remote|claude-code-web|remote|ccr) printf 'ccr' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 SOURCE="${AGENT_MEMORY_SOURCE:-$(cfg source '')}"
 [ -z "$SOURCE" ] && SOURCE="$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
 [ -z "$SOURCE" ] && SOURCE="unknown"
+SOURCE="$(normalize_source "$SOURCE")"
 
 # The claude -p summariser below is itself a Claude session, which fires SessionEnd again.
 [ "${CLAUDE_MEMORY_CAPTURE:-}" = "1" ] && exit 0

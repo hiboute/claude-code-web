@@ -244,7 +244,12 @@ install_memory_hooks() {
   # 1. Persist what the hooks need.
   printf '%s' "${AGENT_MEMORY_VAULT_ID:-homelab}" > "${cfg}/vault"
   printf '%s' "${AGENT_MEMORY_MCP_URL:-https://mcp-obsidian.chrobiche.workers.dev/mcp}" > "${cfg}/mcp-url"
-  printf '%s' "${AGENT_MEMORY_SOURCE:-ccr}" > "${cfg}/source"
+  # Same alias folding as the hook, so the persisted value and the env agree: the
+  # distiller sorts on <source> and one client must not arrive under three names.
+  case "${AGENT_MEMORY_SOURCE:-ccr}" in
+    cloud|claude-code-remote|claude-code-web|remote|ccr|'') printf 'ccr' ;;
+    *) printf '%s' "${AGENT_MEMORY_SOURCE}" ;;
+  esac > "${cfg}/source"
   # A machine that syncs the vault locally reads and writes it without the network.
   # Sandboxes never do; the file is only written when the path actually exists.
   if [ -n "${AGENT_MEMORY_VAULT:-}" ] && [ -d "${AGENT_MEMORY_VAULT}" ]; then
