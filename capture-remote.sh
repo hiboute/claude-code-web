@@ -4,7 +4,7 @@
 #
 # Memory v2 (2026-08-27): the vault is served by the `obsidian` MCP (Cloudflare Worker
 # over YAOS). The git rail — `hiboute/memory`, `gh api` PUTs, mcp-memory.robiche.fr — is
-# retired and nothing here talks to it. The `memory` skill and the vault's `rules.md`
+# retired and nothing here talks to it. The `homelab-memory` skill and `rules.md`
 # are the governing policy; the capture this hook writes follows the same format a model
 # would write by hand (`references/capture-format.md` in that skill).
 #
@@ -16,7 +16,9 @@
 #   2. the obsidian MCP's JSON-RPC over plain HTTPS, when a bearer is available
 #   3. neither: stage the composed note under ~/.cache/agent-memory/pending/, where the
 #      next session's SessionStart hook surfaces it — the model has the MCP and files it.
-#      Nothing is summarised twice and nothing is lost.
+#      #gotcha This only defers the write on a machine that persists: a cloud sandbox is
+#      reclaimed at session end, so there the staged file dies with the container and the
+#      capture IS lost. In a sandbox, rail 2 (the bearer) is what makes capture durable.
 #
 # The summariser tries two paths, in order:
 #   1. `claude -p --model haiku`   — free on the machine's subscription

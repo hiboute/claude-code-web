@@ -15,9 +15,10 @@ Installs:
 
 Memory is the Obsidian vault **`homelab`**, read and written through the **`obsidian`**
 MCP (`https://mcp-obsidian.chrobiche.workers.dev/mcp`, a Cloudflare Worker over YAOS).
-The **`memory` skill** — synced to `~/.claude/skills`, not installed from here — is the
-governing contract: recall path, the vault's own `rules.md`, and the capture format the
-hooks emit. The git rail is retired: no `hiboute/memory` clone, no `gh api`, no
+The **`homelab-memory` skill** — synced to `~/.claude/skills`, not installed from here
+— is the governing contract: recall path, the vault's own `rules.md`, and the capture
+format the hooks emit. (It cannot be called `memory`: that name collides with Claude
+Code's built-in `/memory` command and the Skill tool refuses to load it.) The git rail is retired: no `hiboute/memory` clone, no `gh api`, no
 `Memory` connector (`memory_get_core` / `memory_append`).
 
 ## Why
@@ -87,8 +88,11 @@ needs no credential at all:
 | `SessionStart` | reads `core.md` + the hub matching this repo (via `INDEX.md`) and injects them | injects the *contract* instead: the session loads `core.md` through the `obsidian` MCP with its own first tool call |
 | `SessionEnd` | summarises the session and writes one new file under `inbox/` | stages the composed note in `~/.cache/agent-memory/pending/`, which the next `SessionStart` hands to the model to file |
 
-So memory is never silently lost, and a sandbox without the bearer is degraded, not
-broken.
+A session without the bearer is degraded, not broken — but note what staging can and
+cannot do: it defers the write on a machine that persists (a Mac), and a cloud sandbox
+is reclaimed at session end, so there the staged file dies with the container. In a
+sandbox, `OBSIDIAN_MCP_TOKEN` is what makes capture durable; without it the read path
+still works (the session loads `core.md` itself) but the capture is best-effort.
 
 ## Running locally
 
