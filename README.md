@@ -7,13 +7,18 @@ Installs:
 - [1Password CLI](https://developer.1password.com/docs/cli/) (`op`)
 - [gstack skills](https://github.com/garrytan/gstack) — into `~/.claude/skills/gstack`
 - [Hiboute skills](https://github.com/hiboute/skills) — into `~/.claude/skills/hiboute-skills`
-- A skills reference block in `~/.claude/CLAUDE.md`
+- A skills + memory reference block in `~/.claude/CLAUDE.md`
 - **Agent-memory hooks** in `~/.claude/settings.json` — `SessionStart` injects `core.md`
   into context, `SessionEnd` captures the finished session into the vault's inbox. The
   two hook scripts (`inject-core.sh`, `capture-remote.sh`) live **in this repo**: they
-  contain nothing sensitive, which is what keeps every fetch anonymous. The private
-  [hiboute/memory](https://github.com/hiboute/memory) README documents how the memory
-  system works.
+  contain nothing sensitive, which is what keeps every fetch anonymous.
+
+Memory is the Obsidian vault **`homelab`**, read and written through the **`obsidian`**
+MCP (`https://mcp-obsidian.chrobiche.workers.dev/mcp`, a Cloudflare Worker over YAOS).
+The **`memory` skill** — synced to `~/.claude/skills`, not installed from here — is the
+governing contract: recall path, the vault's own `rules.md`, and the capture format the
+hooks emit. The git rail is retired: no `hiboute/memory` clone, no `gh api`, no
+`Memory` connector (`memory_get_core` / `memory_append`).
 
 ## Why
 
@@ -57,16 +62,33 @@ The memory hooks read these from the cloud environment's secrets:
 
 | Secret | Why |
 |---|---|
-| `AGENT_MEMORY_GH_TOKEN` | fine-grained PAT, **Contents read + write** on `hiboute/memory` — capture PUTs new inbox files, it does not just read. Do **not** name it `GH_TOKEN`: the platform injects its own token under that name, scoped to the session's repo, and it 403s against the vault |
-| `AGENT_MEMORY_SOURCE=cloud` | sandbox hostnames are random container IDs; this names the inbox files |
-| `ANTHROPIC_API_KEY` | optional — summariser fallback for when a nested `claude -p` cannot authenticate (see "Which Haiku answers" in the memory README) |
+| `OBSIDIAN_MCP_TOKEN` | bearer for the `obsidian` MCP endpoint. Optional but load-bearing: with it the hooks read `core.md` and write the capture themselves; without it they degrade (see below) |
+| `AGENT_MEMORY_SOURCE=ccr` | sandbox hostnames are random container IDs; this names the capture files and the `source:` frontmatter key. Defaults to `ccr` |
+| `ANTHROPIC_API_KEY` | optional — summariser fallback for when a nested `claude -p` cannot authenticate |
+
+Optional overrides, all with working defaults: `AGENT_MEMORY_VAULT_ID` (`homelab`),
+`AGENT_MEMORY_MCP_URL` (the Worker), `AGENT_MEMORY_VAULT` (path to a locally synced copy
+of the vault — set on a Mac running Obsidian, never in a sandbox), `AGENT_MEMORY_LLM_URL`
+and `AGENT_MEMORY_LLM_MODEL`.
 
 **Hook processes never see environment secrets** — secrets load after hooks, which
 is also why this repo is public. The setup script is the actor that has them, so it
 persists what the hooks need to `~/.config/agent-memory/` and fetches the hook scripts
-from this repo into `~/.local/bin` — anonymously, since nothing in them is sensitive. Without `AGENT_MEMORY_GH_TOKEN` at setup
-time the hooks still install, but memory stays inert until the secret exists: a
-sandbox without memory is degraded, not broken.
+from this repo into `~/.local/bin` — anonymously, since nothing in them is sensitive.
+
+### What the hooks do without a bearer
+
+A hook is a shell command, not a model, so it **cannot call an MCP tool** — the single
+most expensive gotcha of this system. Each hook therefore has rails, and the last one
+needs no credential at all:
+
+| | with `OBSIDIAN_MCP_TOKEN` (or a local vault) | without |
+|---|---|---|
+| `SessionStart` | reads `core.md` + the hub matching this repo (via `INDEX.md`) and injects them | injects the *contract* instead: the session loads `core.md` through the `obsidian` MCP with its own first tool call |
+| `SessionEnd` | summarises the session and writes one new file under `inbox/` | stages the composed note in `~/.cache/agent-memory/pending/`, which the next `SessionStart` hands to the model to file |
+
+So memory is never silently lost, and a sandbox without the bearer is degraded, not
+broken.
 
 ## Running locally
 

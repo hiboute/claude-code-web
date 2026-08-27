@@ -1,14 +1,22 @@
 #!/bin/bash
-# SessionEnd hook for CLIENT machines — any machine that is not the memory host.
+# SessionEnd hook: turn a finished session into ONE new capture under `inbox/` in the
+# Obsidian vault `homelab`.
 #
-# Same job as capture.sh, but the client has no vault on disk.
+# Memory v2 (2026-08-27): the vault is served by the `obsidian` MCP (Cloudflare Worker
+# over YAOS). The git rail — `hiboute/memory`, `gh api` PUTs, mcp-memory.robiche.fr — is
+# retired and nothing here talks to it. The `memory` skill and the vault's `rules.md`
+# are the governing policy; the capture this hook writes follows the same format a model
+# would write by hand (`references/capture-format.md` in that skill).
 #
-# It does NOT go through the MCP server, even though that is where memory_append lives.
-# Hooks run headless, and headless sessions cannot see claude.ai connectors at all,
-# while a locally-registered MCP server needs an interactive OAuth login before it
-# works. Either way the hook would silently capture nothing — which is exactly what
-# happened. So it writes to the vault through `gh` instead: already authenticated on
-# these machines, no new credential, and it works headless.
+# #gotcha A hook is headless and CANNOT call an MCP tool: it cannot see claude.ai
+# connectors, and a locally-registered MCP server would need an interactive OAuth login.
+# So the write goes over whatever a shell can reach, in order:
+#
+#   1. a local copy of the vault ($AGENT_MEMORY_VAULT) — write the file, let Obsidian sync
+#   2. the obsidian MCP's JSON-RPC over plain HTTPS, when a bearer is available
+#   3. neither: stage the composed note under ~/.cache/agent-memory/pending/, where the
+#      next session's SessionStart hook surfaces it — the model has the MCP and files it.
+#      Nothing is summarised twice and nothing is lost.
 #
 # The summariser tries two paths, in order:
 #   1. `claude -p --model haiku`   — free on the machine's subscription
@@ -18,67 +26,105 @@
 # Endpoint/model overridable via $AGENT_MEMORY_LLM_URL / $AGENT_MEMORY_LLM_MODEL.
 # Neither path available → no capture, silently.
 #
-# Each capture creates its own file, so two machines (or two sessions) can never collide
-# and there is no read-modify-write against the GitHub API. The distillation job sweeps
-# up whatever it finds in inbox/.
+# One file per capture, so two machines (or two sessions) can never collide. The nightly
+# distiller sweeps up whatever it finds in `inbox/` and is the only writer of core.md,
+# INDEX.md and the hubs — this hook never touches those.
 #
-# Optional: $AGENT_MEMORY_SOURCE overrides the source name (useful in cloud sandboxes,
-# where the hostname is a random container ID).
+# Optional: $AGENT_MEMORY_SOURCE names the writing client (`ccr`, `cowork`, a hostname);
+# useful in cloud sandboxes, where the hostname is a random container ID.
 #
 # Exits 0 in every path: a failed capture must never error out a finished session.
 set -uo pipefail
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-REPO="${AGENT_MEMORY_REPO:-hiboute/memory}"
-SOURCE="${AGENT_MEMORY_SOURCE:-}"
-[ -z "$SOURCE" ] && [ -f "$HOME/.config/agent-memory/source" ] \
-  && SOURCE="$(tr -d '\n' < "$HOME/.config/agent-memory/source")"
-[ -z "$SOURCE" ] && SOURCE="$(hostname -s | tr '[:upper:]' '[:lower:]')"
+CFG="$HOME/.config/agent-memory"
+PENDING_DIR="$HOME/.cache/agent-memory/pending"
 
-# MCP endpoint (sandbox rail). If a bearer is present we will write via the MCP
-# endpoint instead of gh — gh/api.github.com is brokered in cloud sandboxes and
-# cannot reach a private vault repo, but the MCP host is plain reachable HTTPS.
-MCP_URL="${AGENT_MEMORY_MCP_URL:-https://mcp-memory.robiche.fr/mcp}"
-MCP_TOKEN="${AGENT_MEMORY_TOKEN:-}"
-[ -z "$MCP_TOKEN" ] && [ -f "$HOME/.config/agent-memory/mcp-token" ] \
-  && MCP_TOKEN="$(tr -d '\n' < "$HOME/.config/agent-memory/mcp-token")"
-
-# This host may have several gh accounts; only GH_USER can push to the private memory
-# repo. Shadow `gh` so every call carries GH_USER's token, pulled from the keyring
-# with `--user` — without switching the active account (which would hijack the
-# user's other terminals). If the token can't be read, fall back to the active
-# account: a degraded capture, not a broken one. In cloud sandboxes the keyring
-# lookup fails and $AGENT_MEMORY_GH_TOKEN (a dedicated fine-grained PAT) takes
-# over, read from env or from ~/.config/agent-memory/gh-token — a file the
-# environment setup script writes, because hook processes never see environment
-# secrets (they load after hooks). The platform's ambient $GH_TOKEN is its own
-# installation token, scoped to the session's repo, and cannot see this vault.
-GH_USER="${AGENT_MEMORY_GH_USER:-hiboute}"
-gh() {
-  local t; t="$(command gh auth token --user "$GH_USER" 2>/dev/null)"
-  [ -z "$t" ] && t="${AGENT_MEMORY_GH_TOKEN:-}"
-  [ -z "$t" ] && [ -f "$HOME/.config/agent-memory/gh-token" ] \
-    && t="$(tr -d '\n' < "$HOME/.config/agent-memory/gh-token")"
-  if [ -n "$t" ]; then GH_TOKEN="$t" command gh "$@"; else command gh "$@"; fi
+cfg() {  # cfg <filename> <fallback>
+  if [ -f "$CFG/$1" ]; then tr -d '\n' < "$CFG/$1"; else printf '%s' "$2"; fi
 }
+
+VAULT_ID="${AGENT_MEMORY_VAULT_ID:-$(cfg vault homelab)}"
+MCP_URL="${AGENT_MEMORY_MCP_URL:-$(cfg mcp-url https://mcp-obsidian.chrobiche.workers.dev/mcp)}"
+MCP_TOKEN="${OBSIDIAN_MCP_TOKEN:-$(cfg obsidian-token '')}"
+VAULT="${AGENT_MEMORY_VAULT:-$(cfg vault-path '')}"
+
+SOURCE="${AGENT_MEMORY_SOURCE:-$(cfg source '')}"
+[ -z "$SOURCE" ] && SOURCE="$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+[ -z "$SOURCE" ] && SOURCE="unknown"
 
 # The claude -p summariser below is itself a Claude session, which fires SessionEnd again.
 [ "${CLAUDE_MEMORY_CAPTURE:-}" = "1" ] && exit 0
 
-if [ -z "$MCP_TOKEN" ]; then
-  command -v gh >/dev/null 2>&1 || exit 0
-  gh auth status >/dev/null 2>&1 || exit 0
-fi
-
 LLM_KEY="${ANTHROPIC_API_KEY:-}"
-LLM_KEY_FILE="${AGENT_MEMORY_LLM_KEY_FILE:-$HOME/.config/agent-memory/llm-key}"
+LLM_KEY_FILE="${AGENT_MEMORY_LLM_KEY_FILE:-$CFG/llm-key}"
 if [ -z "$LLM_KEY" ] && [ -f "$LLM_KEY_FILE" ]; then
   LLM_KEY=$(tr -d '\n' < "$LLM_KEY_FILE")
 fi
-# At least one summariser path must exist.
+# At least one summariser path must exist. (A write rail is not required: without one
+# the capture is staged for the next session instead of being thrown away.)
 command -v claude >/dev/null 2>&1 || [ -n "$LLM_KEY" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
 
+# --- obsidian MCP over plain HTTPS -------------------------------------------
+MCP_SESSION=""
+
+mcp_headers() {
+  MCP_HDRS=(-H "Authorization: Bearer $MCP_TOKEN"
+            -H "Content-Type: application/json"
+            -H "Accept: application/json, text/event-stream")
+  [ -n "$MCP_SESSION" ] && MCP_HDRS+=(-H "Mcp-Session-Id: $MCP_SESSION")
+}
+
+mcp_init() {
+  [ -n "$MCP_TOKEN" ] || return 1
+  local hdr
+  mcp_headers
+  hdr=$(curl -sS -m 12 -D - -o /dev/null -X POST "$MCP_URL" "${MCP_HDRS[@]}" \
+    -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agent-memory-hook","version":"2"}}}' \
+    2>/dev/null) || return 1
+  MCP_SESSION=$(printf '%s' "$hdr" | tr -d '\r' | grep -i '^mcp-session-id:' | tail -1 | cut -d' ' -f2)
+  if [ -n "$MCP_SESSION" ]; then
+    mcp_headers
+    curl -sS -m 12 -o /dev/null -X POST "$MCP_URL" "${MCP_HDRS[@]}" \
+      -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' 2>/dev/null
+  fi
+  return 0
+}
+
+# Prints result.content[0].text; returns non-zero on transport error, JSON-RPC error,
+# or an isError result (a missing note answers "no such note: <path>" that way).
+mcp_call() {
+  local name="$1" args="$2" resp body ok
+  [ -n "$MCP_TOKEN" ] || return 1
+  mcp_headers
+  resp=$(curl -sS -m 30 -X POST "$MCP_URL" "${MCP_HDRS[@]}" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"$name\",\"arguments\":$args}}" \
+    2>/dev/null) || return 1
+  body=$(printf '%s\n' "$resp" | sed -n 's/^data: //p'); [ -z "$body" ] && body="$resp"
+  ok=$(printf '%s' "$body" | jq -r 'if (.result? and (.result.isError != true)) then "1" else "0" end' 2>/dev/null)
+  [ "$ok" = "1" ] || return 1
+  printf '%s' "$body" | jq -r '.result.content[0].text // empty' 2>/dev/null
+}
+
+# vault_write_note overwrites silently, so a path must be proved free first: an
+# unmatched prefix lists as []. Unknown (call failed) counts as "not free".
+path_free() {
+  local prefix="$1" out
+  out=$(mcp_call vault_list_notes "$(jq -nc --arg v "$VAULT_ID" --arg p "$prefix" '{vaultId:$v,pathPrefix:$p}')") || return 1
+  [ "$(printf '%s' "$out" | jq -r 'if type=="array" then length else 1 end' 2>/dev/null)" = "0" ]
+}
+
+slugify() {
+  local s="$1" a
+  a=$(printf '%s' "$s" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null)
+  [ -n "$a" ] && s="$a"
+  printf '%s' "$s" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+    | cut -c1-40 | sed -e 's/^-*//' -e 's/-*$//'
+}
+
+# --- Transcript ---------------------------------------------------------------
 payload=$(cat)
 transcript=$(printf '%s' "$payload" | jq -r '.transcript_path // empty')
 [ -z "$transcript" ] || [ ! -f "$transcript" ] && exit 0
@@ -88,22 +134,37 @@ lines=$(wc -l < "$transcript" | tr -d ' ')
 [ "${lines:-0}" -lt 15 ] && exit 0
 
 read -r -d '' PROMPT <<'EOF'
-You are maintaining a long-term memory for a user across many Claude sessions.
+You are maintaining a long-term memory for a user across many Claude sessions. It is an
+Obsidian vault; your output becomes one new capture file under its inbox/, which a
+nightly distiller merges into the curated notes.
 
-Read the transcript below. Extract ONLY facts that will still matter in a month:
-  - decisions made, and the reasoning behind them
+Read the transcript below. Extract ONLY what will still matter in a month:
+  - decisions the user made, and the reasoning behind them
   - how this user's systems are actually configured (paths, hosts, services)
   - preferences and corrections the user gave
   - non-obvious gotchas discovered the hard way
 
 Ignore: routine tool calls, code already committed, anything reconstructible from the
-repo, and anything that only mattered inside this one session.
-
-Output format — markdown, no preamble:
-  ## <short title>
-  <2-5 sentences>
+repo, anything that only mattered inside this one session, and your own suggestions the
+user did not adopt. Never record credentials, tokens or keys — name where they live
+(the 1Password item) instead. No L'Oreal internals beyond role, tooling and
+architecture. No family detail finer than "Tours region".
 
 If nothing is worth remembering — the common case — output exactly: NONE
+
+Otherwise output exactly this shape, no preamble, no code fences:
+
+TITLE: <one line, no leading #>
+TYPE: <fact | decision | runbook | gotcha | incident>
+PROJECTS: <comma-separated entity slugs this is about (e.g. vps, agent-memory), or empty>
+TAGS: <comma-separated, only from: decision runbook gotcha incident work perso>
+BODY:
+# <the title again, as an H1>
+
+<2-5 sentences, self-contained: dates, hostnames, paths. A decision uses:
+**Why:** <the deciding reason, alternatives rejected if any>
+**Scope:** <what it applies to; effective date>
+and must be the user's own decision, stated by them — never one you inferred.>
 EOF
 
 INPUT_FILE=$(mktemp)
@@ -134,33 +195,93 @@ fi
 
 [ -z "$learnings" ] && exit 0
 printf '%s' "$learnings" | grep -qx "NONE" && exit 0
-printf '%s' "$learnings" | grep -q "^## " || exit 0
 
-session=$(printf '%s' "$payload" | jq -r '.session_id // empty' | cut -c1-8)
-[ -z "$session" ] && session=$(date +%H%M%S)
-path="inbox/$(date +%F)-${SOURCE}-${session}.md"
+# --- Compose the capture ------------------------------------------------------
+title=$(printf '%s\n' "$learnings" | grep -m1 '^TITLE:' | sed 's/^TITLE:[[:space:]]*//')
+kind=$(printf '%s\n' "$learnings" | grep -m1 '^TYPE:' | sed 's/^TYPE:[[:space:]]*//' \
+         | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+projects=$(printf '%s\n' "$learnings" | grep -m1 '^PROJECTS:' | sed 's/^PROJECTS:[[:space:]]*//')
+tags=$(printf '%s\n' "$learnings" | grep -m1 '^TAGS:' | sed 's/^TAGS:[[:space:]]*//' \
+         | tr '[:upper:]' '[:lower:]')
+body=$(printf '%s\n' "$learnings" | sed -n '/^BODY:[[:space:]]*$/,$p' | sed '1d')
 
-content=$(printf '# Session capture — %s (%s)\n\n%s\n\n_captured %s_\n' \
-  "$SOURCE" "$(date +%F)" "$learnings" "$(date -Iseconds)")
+# Malformed answer (an older model, a truncated reply) — nothing safe to file.
+[ -z "$title" ] && exit 0
+[ -z "$body" ] && exit 0
+printf '%s' "$body" | grep -q '^# ' || body=$(printf '# %s\n\n%s' "$title" "$body")
 
-# Write path forks by rail. Sandbox (bearer present): POST memory_append to the MCP
-# endpoint — the server files it under inbox/<date>-<source>.md itself, so $path is
-# unused on this branch. Host/Mac (no bearer): gh api PUT as before.
-if [ -n "$MCP_TOKEN" ]; then
-  req=$(jq -n --arg t "Session on $SOURCE" --arg c "$learnings" --arg s "$SOURCE" \
-    '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"memory_append",
-      arguments:{title:$t,content:$c,source:$s,tags:"session-capture"}}}')
-  curl -sS -m 30 -X POST "$MCP_URL" \
-    -H "Authorization: Bearer $MCP_TOKEN" \
-    -H "Content-Type: application/json" \
-    -H "Accept: application/json, text/event-stream" \
-    -d "$req" >/dev/null 2>&1 || true
-else
-  # tr -d: GNU base64 wraps at 76 cols (Linux sandboxes); macOS does not. Strip both.
-  gh api --method PUT "repos/$REPO/contents/$path" \
-    -f message="memory: session capture from $SOURCE" \
-    -f content="$(printf '%s' "$content" | base64 | tr -d '\n')" \
-    >/dev/null 2>&1 || true
+case "$kind" in
+  fact|decision|runbook|gotcha|incident) ;;
+  *) kind="fact" ;;
+esac
+
+# Only vocab.md tags survive distillation; anything else is noise. Keep a sphere tag.
+clean_list() {  # clean_list "<csv>" "<allowed…>" — echoes a YAML inline list
+  local csv="$1"; shift
+  local allowed=" $* " item out=""
+  IFS=','; for item in $csv; do
+    item=$(printf '%s' "$item" | tr -d '[:space:]')
+    [ -z "$item" ] && continue
+    if [ $# -eq 0 ] || case "$allowed" in *" $item "*) true;; *) false;; esac; then
+      case ",$out," in *",$item,"*) ;; *) out="${out:+$out,}$item" ;; esac
+    fi
+  done
+  unset IFS
+  printf '%s' "$out"
+}
+
+tags=$(clean_list "$tags" decision runbook gotcha incident work perso)
+case ",$tags," in *,work,*|*,perso,*) ;; *) tags="${tags:+$tags,}perso" ;; esac
+projects=$(clean_list "$projects")
+
+today=$(date +%F)
+slug=$(slugify "$title")
+[ -z "$slug" ] && slug="session-capture"
+
+content=$(printf -- '---\ntype: %s\nprojects: [%s]\ntags: [%s]\nsource: %s\ncreated: %s\n---\n%s' \
+  "$kind" "${projects//,/, }" "${tags//,/, }" "$SOURCE" "$today" "$body")
+content+=$'\n'   # command substitution eats trailing newlines; notes end with one
+
+base="inbox/${today}-${SOURCE}-${slug}"
+path="${base}.md"
+
+# --- Write --------------------------------------------------------------------
+# 1. Local vault: this machine syncs the vault, so writing the file IS the write.
+if [ -n "$VAULT" ] && [ -d "$VAULT/inbox" ]; then
+  n=2
+  while [ -e "$VAULT/$path" ] && [ "$n" -le 9 ]; do path="${base}-${n}.md"; n=$((n + 1)); done
+  if [ ! -e "$VAULT/$path" ]; then
+    printf '%s' "$content" > "$VAULT/$path" && exit 0
+  fi
 fi
+
+# 2. obsidian MCP with a bearer. Only ever write to a path proved free: if the listing
+#    itself fails we know nothing, so fall through to staging rather than risk
+#    replacing a note.
+if [ -n "$MCP_TOKEN" ] && mcp_init; then
+  free_path="" candidate="$base" n=2
+  while [ "$n" -le 10 ]; do
+    if path_free "$candidate"; then free_path="$candidate"; break; fi
+    candidate="inbox/${today}-${SOURCE}-${slug}-${n}"; n=$((n + 1))
+  done
+  if [ -n "$free_path" ]; then
+    path="${free_path}.md"
+    if mcp_call vault_write_note \
+        "$(jq -nc --arg v "$VAULT_ID" --arg p "$path" --arg t "$content" \
+             '{vaultId:$v,path:$p,text:$t,confirm:true}')" >/dev/null; then
+      exit 0
+    fi
+  fi
+fi
+
+# 3. No write rail. Stage it for the next session's SessionStart hook, which asks the
+#    model — which does have the MCP — to file it. First line names the vault path.
+mkdir -p "$PENDING_DIR"
+staged="$PENDING_DIR/$(printf '%s' "$path" | tr '/' '_')"
+n=2
+while [ -e "$staged" ] && [ "$n" -le 9 ]; do
+  staged="$PENDING_DIR/$(printf '%s' "${base}-${n}.md" | tr '/' '_')"; n=$((n + 1))
+done
+printf '<!-- vault-path: %s -->\n%s' "$path" "$content" > "$staged" 2>/dev/null
 
 exit 0

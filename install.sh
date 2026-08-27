@@ -4,8 +4,10 @@
 #   - 1Password CLI
 #   - gstack skills       (garrytan/gstack)
 #   - Hiboute skills      (hiboute/skills)
-#   - Appends a skills reference block to ~/.claude/CLAUDE.md
-#   - Memory hooks (inject-core.sh / capture-remote.sh) into ~/.claude/settings.json
+#   - Appends a skills + memory reference block to ~/.claude/CLAUDE.md
+#   - Memory hooks (inject-core.sh / capture-remote.sh) into ~/.claude/settings.json,
+#     wired to the Obsidian vault `homelab` over the `obsidian` MCP — the `memory`
+#     skill is the contract; the retired git rail (hiboute/memory) is gone.
 #
 # Usage as a SessionStart hook (.claude/settings.json):
 #   bash -lc 'curl -fsSL https://raw.githubusercontent.com/hiboute/claude-code-web/main/install.sh | bash'
@@ -135,7 +137,6 @@ install_hiboute_skills() {
 
 # --- CLAUDE.md reference block ----------------------------------------------
 # Appends a skills reference block to ~/.claude/CLAUDE.md, guarded by a
-#   - Memory hooks (inject-core.sh / capture-remote.sh) into ~/.claude/settings.json
 # sentinel marker so re-runs don't duplicate the section.
 SENTINEL_BEGIN="<!-- claude-code-web:skills-ref BEGIN -->"
 SENTINEL_END="<!-- claude-code-web:skills-ref END -->"
@@ -191,21 +192,46 @@ Available skills: `/ideation` `/roadmap` `/autopilot`
 
 Install with: `gh repo clone hiboute/skills ~/.claude/skills/hiboute-skills && ~/.claude/skills/hiboute-skills/setup`
 Update with: `~/.claude/skills/hiboute-skills/bin/hiboute-skills-upgrade`
+
+## Long-term memory
+
+Memory is the Obsidian vault `homelab` (exact lowercase), read and written **only**
+through the `obsidian` MCP — `vault_read_note`, `vault_search`, `vault_list_notes`,
+`vault_write_note` (in Claude Code usually `mcp__obsidian__vault_*`).
+
+Load the `memory` skill before reading or recording anything: it carries the recall
+contract, the vault's own `rules.md` and the capture format. Read `core.md` first,
+resolve an entity through `INDEX.md`, then read its hub. Record durable new facts as
+ONE new file under `inbox/`; never write to `core.md`, `INDEX.md` or a hub — the
+nightly distiller owns those.
+
+The git rail is retired: no `hiboute/memory` clone, no `gh api` reads or writes, and
+no `Memory` connector (`memory_get_core`, `memory_search`, `memory_recall`,
+`memory_append`). If that connector still answers, it is serving a stale copy — do
+not fall back to it.
 EOF
 }
 
 # --- Memory hooks -------------------------------------------------------------
+# Memory v2 (2026-08-27): memory is the Obsidian vault `homelab`, reached through the
+# `obsidian` MCP. The git rail — hiboute/memory, `gh api`, mcp-memory.robiche.fr — is
+# retired, so nothing here provisions a GitHub token for it any more. The `memory`
+# skill (synced to ~/.claude/skills) is the contract the model follows; these hooks
+# only make sure memory is loaded at session start and captured at session end.
+#
 # Hook processes never see environment secrets (they load after hooks) — the
 # reason this whole repo, hook scripts included, is public: everything a hook
 # fetches must be fetchable with zero credentials. The setup script is the one
 # actor that runs WITH the secrets, so it bridges them into files:
-#   1. persist AGENT_MEMORY_GH_TOKEN / ANTHROPIC_API_KEY / AGENT_MEMORY_SOURCE
-#      into ~/.config/agent-memory/ (0600)
+#   1. persist OBSIDIAN_MCP_TOKEN / ANTHROPIC_API_KEY, plus the vault id, endpoint
+#      and source name, into ~/.config/agent-memory/ (secrets 0600)
 #   2. fetch inject-core.sh + capture-remote.sh from THIS repo, anonymously,
 #      into ~/.local/bin
 #   3. write SessionStart/SessionEnd hooks that run those local copies
-# The scripts contain nothing sensitive; without the gh-token file, memory
-# stays inert at run time — degraded, not broken.
+# The scripts contain nothing sensitive. Without a bearer the hooks still work,
+# degraded: SessionStart injects the contract instead of the memory and the session
+# reads core.md through the MCP itself, SessionEnd stages its capture for the next
+# session to file.
 install_memory_hooks() {
   local settings="${CLAUDE_HOME}/settings.json"
   local bin="${HOME}/.local/bin"
@@ -215,26 +241,50 @@ install_memory_hooks() {
   mkdir -p "${bin}" "${cfg}"
   chmod 700 "${cfg}"
 
-  # 1. Persist secrets for the hooks.
-  if [ -n "${AGENT_MEMORY_GH_TOKEN:-}" ]; then
-    printf '%s' "${AGENT_MEMORY_GH_TOKEN}" > "${cfg}/gh-token" && chmod 600 "${cfg}/gh-token"
-    log "Persisted AGENT_MEMORY_GH_TOKEN to ${cfg}/gh-token"
+  # 1. Persist what the hooks need.
+  printf '%s' "${AGENT_MEMORY_VAULT_ID:-homelab}" > "${cfg}/vault"
+  printf '%s' "${AGENT_MEMORY_MCP_URL:-https://mcp-obsidian.chrobiche.workers.dev/mcp}" > "${cfg}/mcp-url"
+  printf '%s' "${AGENT_MEMORY_SOURCE:-ccr}" > "${cfg}/source"
+  # A machine that syncs the vault locally reads and writes it without the network.
+  # Sandboxes never do; the file is only written when the path actually exists.
+  if [ -n "${AGENT_MEMORY_VAULT:-}" ] && [ -d "${AGENT_MEMORY_VAULT}" ]; then
+    printf '%s' "${AGENT_MEMORY_VAULT}" > "${cfg}/vault-path"
+    log "Local vault at ${AGENT_MEMORY_VAULT}: hooks will read and write it directly"
   else
-    log "AGENT_MEMORY_GH_TOKEN not set: hooks install anyway; memory stays inert until it is."
+    rm -f "${cfg}/vault-path"
+  fi
+
+  # The obsidian MCP bearer is the only credential the cloud rail can use: a hook
+  # cannot call an MCP tool, and the Worker requires Authorization. Written
+  # unconditionally when present so a boot-during-push cannot skip it.
+  if [ -n "${OBSIDIAN_MCP_TOKEN:-}" ]; then
+    printf '%s' "${OBSIDIAN_MCP_TOKEN}" > "${cfg}/obsidian-token" && chmod 600 "${cfg}/obsidian-token"
+    log "Persisted OBSIDIAN_MCP_TOKEN to ${cfg}/obsidian-token (obsidian MCP rail)"
+  else
+    log "OBSIDIAN_MCP_TOKEN not set: hooks fall back to the contract rail — the session"
+    log "  loads core.md through the obsidian MCP itself and files staged captures."
   fi
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     printf '%s' "${ANTHROPIC_API_KEY}" > "${cfg}/llm-key" && chmod 600 "${cfg}/llm-key"
     log "Persisted ANTHROPIC_API_KEY to ${cfg}/llm-key"
   fi
-  printf '%s' "${AGENT_MEMORY_SOURCE:-cloud}" > "${cfg}/source"
-  # The MCP bearer is what the cloud rail actually needs — gh is brokered in
-  # sandboxes, the MCP host is not. Persist it for the hooks (they run without env
-  # secrets). Written unconditionally when present so a boot-during-push cannot skip it.
-  if [ -n "${AGENT_MEMORY_TOKEN:-}" ]; then
-    printf '%s' "${AGENT_MEMORY_TOKEN}" > "${cfg}/mcp-token" && chmod 600 "${cfg}/mcp-token"
-    log "Persisted AGENT_MEMORY_TOKEN to ${cfg}/mcp-token (MCP rail)"
-  else
-    log "AGENT_MEMORY_TOKEN not set: cloud capture needs it (gh is brokered in sandboxes)."
+
+  # Credentials for the retired git rail: remove them rather than leave them lying
+  # around. They authenticate nothing this system still talks to.
+  local stale
+  for stale in gh-token mcp-token; do
+    if [ -f "${cfg}/${stale}" ]; then
+      rm -f "${cfg}/${stale}"
+      log "Removed ${cfg}/${stale} (credential for the retired git/mcp-memory rail)"
+    fi
+  done
+
+  # The `memory` skill carries the recall contract, the vault's rules.md and the
+  # capture format. It arrives through Claude.ai skill sync, not from here; say so
+  # when it is missing rather than pretending memory is fully wired.
+  if ! ls -d "${CLAUDE_HOME}"/skills/*/memory/SKILL.md "${CLAUDE_HOME}"/skills/memory/SKILL.md \
+       >/dev/null 2>&1; then
+    log "NOTE: the 'memory' skill is not installed here (expected via Claude.ai skill sync)."
   fi
 
   # 2. Fetch the hook scripts from this public repo — anonymous by design.
