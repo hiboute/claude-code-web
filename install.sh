@@ -6,8 +6,8 @@
 #   - Hiboute skills      (hiboute/skills)
 #   - Appends a skills + memory reference block to ~/.claude/CLAUDE.md
 #   - Memory hooks (inject-core.sh / capture-remote.sh) into ~/.claude/settings.json,
-#     wired to the Obsidian vault `homelab` over the `obsidian` MCP — the `memory`
-#     skill is the contract; the retired git rail (hiboute/memory) is gone.
+#     wired to the Obsidian vault `homelab` over the `obsidian` MCP — the
+#     `homelab-memory` skill is the contract; the retired git rail is gone.
 #
 # Usage as a SessionStart hook (.claude/settings.json):
 #   bash -lc 'curl -fsSL https://raw.githubusercontent.com/hiboute/claude-code-web/main/install.sh | bash'
@@ -199,8 +199,8 @@ Memory is the Obsidian vault `homelab` (exact lowercase), read and written **onl
 through the `obsidian` MCP — `vault_read_note`, `vault_search`, `vault_list_notes`,
 `vault_write_note` (in Claude Code usually `mcp__obsidian__vault_*`).
 
-Load the `memory` skill before reading or recording anything: it carries the recall
-contract, the vault's own `rules.md` and the capture format. Read `core.md` first,
+Load the `homelab-memory` skill before reading or recording anything: it carries the
+recall contract, the vault's own `rules.md` and the capture format. Read `core.md` first,
 resolve an entity through `INDEX.md`, then read its hub. Record durable new facts as
 ONE new file under `inbox/`; never write to `core.md`, `INDEX.md` or a hub — the
 nightly distiller owns those.
@@ -279,12 +279,16 @@ install_memory_hooks() {
     fi
   done
 
-  # The `memory` skill carries the recall contract, the vault's rules.md and the
+  # The `homelab-memory` skill carries the recall contract, the vault's rules.md and
   # capture format. It arrives through Claude.ai skill sync, not from here; say so
   # when it is missing rather than pretending memory is fully wired.
-  if ! ls -d "${CLAUDE_HOME}"/skills/*/memory/SKILL.md "${CLAUDE_HOME}"/skills/memory/SKILL.md \
-       >/dev/null 2>&1; then
-    log "NOTE: the 'memory' skill is not installed here (expected via Claude.ai skill sync)."
+  local skill found=""
+  for skill in "${CLAUDE_HOME}"/skills/*/homelab-memory/SKILL.md \
+               "${CLAUDE_HOME}"/skills/homelab-memory/SKILL.md; do
+    [ -f "${skill}" ] && { found=1; break; }
+  done
+  if [ -z "${found}" ]; then
+    log "NOTE: the 'homelab-memory' skill is not installed here (expected via skill sync)."
   fi
 
   # 2. Fetch the hook scripts from this public repo — anonymous by design.

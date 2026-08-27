@@ -4,8 +4,8 @@
 # Memory v2 (2026-08-27): memory is the Obsidian vault `homelab`, read and written only
 # through the `obsidian` MCP (a Cloudflare Worker over YAOS storage). The git rail is
 # retired — no `hiboute/memory` clone, no `gh api`, no mcp-memory.robiche.fr. The
-# `memory` skill carries the contract (recall path, the vault's own rules.md, capture
-# format); this hook only makes sure a session never starts blind.
+# `homelab-memory` skill carries the contract (recall path, the vault's own rules.md,
+# capture format); this hook only makes sure a session never starts blind.
 #
 # Reading memory used to be a request in CLAUDE.md ("call memory_get_core at session
 # start"), which the model was free to skip — and did. Writing, meanwhile, was hooked
@@ -18,7 +18,7 @@
 #   1. a local copy of the vault ($AGENT_MEMORY_VAULT)   — free, instant
 #   2. the obsidian MCP's JSON-RPC over plain HTTPS, if a bearer is available
 #   3. neither: inject the *contract* instead of the content — name the vault, the MCP
-#      and the `memory` skill, and let the session's own first tool call read core.md.
+#      and the `homelab-memory` skill, and let the session's first tool call read it.
 #      The model can reach the MCP even where this script cannot.
 #
 # Context priming: `context-map.tsv` is gone (it is not a note, so it cannot live in the
@@ -199,12 +199,12 @@ EOF
 
 The memory itself is the Obsidian vault \`$VAULT_ID\`, reached through the \`obsidian\`
 MCP (\`vault_read_note\`, \`vault_search\`, \`vault_list_notes\`, \`vault_write_note\`;
-in Claude Code usually \`mcp__obsidian__vault_*\`). Load the \`memory\` skill before
-reading further or recording anything — it carries the recall contract, the vault's own
-rules.md and the capture format. Read a hub with \`vault_read_note\`, resolve an unknown
-entity through \`INDEX.md\`, search with one literal token and a \`pathPrefix\`. Record
-durable new facts as ONE new file under \`inbox/\`; never write to core.md, INDEX.md or
-a hub — the distiller owns those.
+in Claude Code usually \`mcp__obsidian__vault_*\`). Load the \`homelab-memory\` skill
+before reading further or recording anything — it carries the recall contract, the
+vault's own rules.md and the capture format. Read a hub with \`vault_read_note\`,
+resolve an unknown entity through \`INDEX.md\`, search with one literal token and a
+\`pathPrefix\`. Record durable new facts as ONE new file under \`inbox/\`; never write
+to core.md, INDEX.md or a hub — the distiller owns those.
 </long-term-memory>
 EOF
 
@@ -218,8 +218,8 @@ reading it needs an MCP tool call, and hooks cannot make one. Load it yourself b
 answering anything about his projects, homelab or VPS infrastructure, L'Oréal work
 context, the people he works with, or past decisions:
 
-1. Load the \`memory\` skill — it carries the recall contract, the vault's own rules.md
-   and the capture format. It governs; this block is only the pointer.
+1. Load the \`homelab-memory\` skill — it carries the recall contract, the vault's own
+   rules.md and the capture format. It governs; this block is only the pointer.
 2. \`vault_read_note {vaultId: "$VAULT_ID", path: "core.md"}\` through the \`obsidian\`
    MCP (in Claude Code usually \`mcp__obsidian__vault_*\`). Treat what it says as
    established fact; do not re-ask what it already tells you.
