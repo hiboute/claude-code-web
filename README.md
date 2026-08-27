@@ -64,7 +64,7 @@ The memory hooks read these from the cloud environment's secrets:
 | Secret | Why |
 |---|---|
 | `OBSIDIAN_MCP_TOKEN` | bearer for the `obsidian` MCP endpoint. Optional but load-bearing: with it the hooks read `core.md` and write the capture themselves; without it they degrade (see below) |
-| `AGENT_MEMORY_SOURCE=ccr` | sandbox hostnames are random container IDs; this names the capture files and the `source:` frontmatter key. Defaults to `ccr` |
+| `AGENT_MEMORY_SOURCE=ccr` | sandbox hostnames are random container IDs; this names the capture files and the `source:` frontmatter key. Defaults to `ccr`, and `cloud` / `claude-code-remote` / `remote` fold onto `ccr` so one client never arrives under three names |
 | `ANTHROPIC_API_KEY` | optional — summariser fallback for when a nested `claude -p` cannot authenticate |
 
 Optional overrides, all with working defaults: `AGENT_MEMORY_VAULT_ID` (`homelab`),
